@@ -186,8 +186,9 @@ export default function ChatPage() {
         if (hasOtherNewMsg) setNewMsgIsFromOther(true)
       }
     }
-    // 发已读回执：首次加载时对所有非自己的消息批量发送，之后只对最新一条发送
-    if (!convId || !user) return
+    // 发已读回执：只在页面可见时发（避免 ChatPage 挂载但用户未看时误触发）
+    // 后端 handleMessageRead 会先发 MESSAGE_RECEIVED 再发 MESSAGE_READ，保证顺序，无需前端延迟
+    if (!convId || !user || document.visibilityState !== 'visible') return
     const msgs = useChatStore.getState().messages[convId] ?? []
     const groupId = msgs[0]?.conversationType === 'group'
       ? (useChatStore.getState().conversations.find(c => c.id === convId)?.groupId)
@@ -207,6 +208,25 @@ export default function ChatPage() {
       }
     }
   }, [convMessages.length, convId, user, atBottom, clearUnread])
+
+  // 页面从后台切回前台时补发已读回执（处理切 tab/锁屏期间收到的消息）
+  useEffect(() => {
+    if (!convId || !user) return
+    function onVisible() {
+      if (document.visibilityState !== 'visible') return
+      const msgs = useChatStore.getState().messages[convId!] ?? []
+      const groupId = msgs[0]?.conversationType === 'group'
+        ? (useChatStore.getState().conversations.find(c => c.id === convId)?.groupId)
+        : undefined
+      for (const m of msgs) {
+        if (m.fromUsername !== user.username && m.status !== 'read') {
+          sendWsMessage({ type: 'MESSAGE_READ', messageId: m.id, toUsername: m.fromUsername, groupId })
+        }
+      }
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [convId, user])
 
   function parseConvId(): { type: 'private' | 'group'; targetUsername: string } {
     if (!convId) return { type: 'private', targetUsername: '' }
